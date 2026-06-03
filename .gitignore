@@ -1,0 +1,38 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Node
+node_modules/
+admin/dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE / tools
+.claude/
+.idea/
+.vscode/
+
+# Alembic (keep versions, ignore compiled)
+*.pyc
+
+# Logs
+*.log
+
+# Local docs
+instruction_deploy.md
