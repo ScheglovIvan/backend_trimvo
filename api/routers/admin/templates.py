@@ -5,6 +5,7 @@ from uuid import UUID
 from core.database import get_db
 from core.dependencies import get_admin_user
 from models.template import Template
+from models.category import CategoryTemplate
 from models.user import User
 from models.admin_config import AuditLog
 from schemas.template import TemplateListResponse
@@ -259,6 +260,7 @@ def delete_template(
     t = db.query(Template).filter(Template.id == template_id).first()
     if not t:
         raise HTTPException(status_code=404, detail="Not found")
+    db.query(CategoryTemplate).filter(CategoryTemplate.template_id == template_id).delete()
     db.delete(t)
     _audit(db, admin.id, "delete", template_id)
     db.commit()
