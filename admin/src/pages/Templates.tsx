@@ -25,8 +25,24 @@ export default function Templates() {
     if (hasProcessing && !pollRef.current) {
       pollRef.current = setInterval(() => {
         api.get("/admin/templates", { params: { page: currentPage, per_page: 20 } }).then((r) => {
-          setTemplates(r.data?.items ?? []);
-          const stillProcessing = (r.data?.items ?? []).some(
+          const newItems: any[] = r.data?.items ?? [];
+          setTemplates(prev => {
+            const newMap = new Map(newItems.map((t: any) => [t.id, t]));
+            return prev.map(t => {
+              const updated = newMap.get(t.id);
+              if (!updated) return t;
+              if (
+                updated.status !== t.status ||
+                updated.thumb_url !== t.thumb_url ||
+                updated.preview_url !== t.preview_url ||
+                updated.preview_compressed_url !== t.preview_compressed_url
+              ) {
+                return updated;
+              }
+              return t;
+            });
+          });
+          const stillProcessing = newItems.some(
             (t: any) => t.status === "processing" || t.status === "queued"
           );
           if (!stillProcessing && pollRef.current) {
