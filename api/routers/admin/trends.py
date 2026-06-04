@@ -12,7 +12,7 @@ router = APIRouter(prefix="/v1/admin/trends", tags=["admin-trends"])
 
 @router.get("", response_model=List[TrendOut])
 def list_trends(db: Session = Depends(get_db), admin=Depends(get_admin_user)):
-    return [TrendOut.model_validate(t) for t in db.query(Trend).order_by(Trend.order).all()]
+    return [TrendOut.model_validate(t) for t in db.query(Trend).filter(Trend.template_id.isnot(None)).order_by(Trend.order).all()]
 
 
 @router.post("", response_model=TrendOut)
