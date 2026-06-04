@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from routers import auth, templates, jobs, payments, reports, gem_packages, subscription_plans, categories, me, uploads
 from routers import config as public_config
+from core.config import get_settings
 from routers.admin import templates as admin_templates
 from routers.admin import categories as admin_categories
 from routers.admin import trends as admin_trends
@@ -32,14 +33,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Trimvo API", version="1.0.0", lifespan=lifespan)
 
+_settings = get_settings()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=[o.strip() for o in _settings.cors_origins.split(",")],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
