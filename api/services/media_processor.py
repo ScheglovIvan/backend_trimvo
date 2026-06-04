@@ -4,12 +4,7 @@ import tempfile
 
 
 def create_preview_compressed(input_path: str, output_path: str) -> None:
-    """Preview for My Works cards: 720p, CRF 26, H.264 High profile, no audio.
-
-    preset=slow gives better compression ratio than fast — same or smaller file
-    size at significantly better visual quality. High profile enables more
-    efficient encoding tools (CABAC, B-frames) absent in Baseline/Main.
-    """
+    """Preview for My Works cards: 720p, CRF 26, H.264 High profile, no audio."""
     subprocess.run(
         [
             "ffmpeg", "-y", "-i", input_path,
@@ -17,7 +12,7 @@ def create_preview_compressed(input_path: str, output_path: str) -> None:
             "-vf", "scale=720:-2",
             "-c:v", "libx264",
             "-crf", "26",
-            "-preset", "slow",
+            "-preset", "fast",
             "-profile:v", "high",
             "-level", "4.0",
             "-movflags", "+faststart",
@@ -36,7 +31,7 @@ def create_preview(input_path: str, output_path: str) -> None:
             "-vf", "scale=1080:-2",
             "-c:v", "libx264",
             "-crf", "22",
-            "-preset", "slow",
+            "-preset", "fast",
             "-profile:v", "high",
             "-level", "4.1",
             "-movflags", "+faststart",
