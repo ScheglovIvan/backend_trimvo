@@ -16,8 +16,12 @@ def get_config_int(db: Session, key: str, default: int) -> int:
 
 def apply_svip_discount(cost: int, user: User) -> int:
     if user.subscription_status == "svip":
-        if user.subscription_expires_at is None or \
-           user.subscription_expires_at > datetime.now(timezone.utc):
+        expires = user.subscription_expires_at
+        if expires is None:
+            return max(1, cost // 2)
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if expires > datetime.now(timezone.utc):
             return max(1, cost // 2)
     return cost
 
