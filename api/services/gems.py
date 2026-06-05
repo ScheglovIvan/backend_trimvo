@@ -29,10 +29,10 @@ def get_generation_cost(db: Session, quality: str, duration_seconds: int) -> int
 
 
 def apply_svip_discount(cost: int, user: User) -> int:
-    from datetime import datetime, timezone
+    from datetime import datetime
     if user.subscription_status == "svip":
         if user.subscription_expires_at is None or \
-           user.subscription_expires_at > datetime.now(timezone.utc):
+           user.subscription_expires_at > datetime.utcnow():
             return max(1, cost // 2)
     return cost
 
