@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from models.user import User
 from models.gem_transaction import GemTransaction
@@ -13,26 +14,10 @@ def get_config_int(db: Session, key: str, default: int) -> int:
         return default
 
 
-def get_generation_cost(db: Session, quality: str, duration_seconds: int) -> int:
-    if duration_seconds <= 5:
-        base = get_config_int(db, "GEMS_BASE_PER_5S", 5)
-        units = 1
-    else:
-        base = get_config_int(db, "GEMS_BASE_PER_10S", 10)
-        units = max(1, (duration_seconds + 9) // 10)
-    multipliers = {
-        "standard": get_config_int(db, "GEMS_MULTIPLIER_STANDARD", 1),
-        "hd":       get_config_int(db, "GEMS_MULTIPLIER_HD", 2),
-        "ultra_hd": get_config_int(db, "GEMS_MULTIPLIER_ULTRA_HD", 4),
-    }
-    return base * multipliers.get(quality, 1) * units
-
-
 def apply_svip_discount(cost: int, user: User) -> int:
-    from datetime import datetime
     if user.subscription_status == "svip":
         if user.subscription_expires_at is None or \
-           user.subscription_expires_at > datetime.utcnow():
+           user.subscription_expires_at > datetime.now(timezone.utc):
             return max(1, cost // 2)
     return cost
 
