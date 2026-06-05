@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 30
 
     replicate_api_token: str = ""
+    wavespeed_api_key: str = ""
 
     stub_mode: bool = True
     stub_latency_ms: int = 10000
@@ -31,6 +32,10 @@ class Settings(BaseSettings):
     admin_password: str = "admin123"
 
     cors_origins: str = "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173"
+
+    # Apple In-App Purchase
+    apple_bundle_id: str = ""
+    apple_sandbox: bool = True
 
     class Config:
         env_file = ".env"

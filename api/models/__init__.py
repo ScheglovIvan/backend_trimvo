@@ -8,3 +8,4 @@ from .report import Report
 from .gem_package import GemPackage
 from .subscription_plan import SubscriptionPlan
 from .gem_transaction import GemTransaction
+from .apple_iap_transaction import AppleIAPTransaction
