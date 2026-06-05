@@ -20,22 +20,22 @@ def _get(db: Session, key: str, default: int) -> int:
 def get_pricing(db: Session = Depends(get_db)):
     base_5s  = _get(db, "GEMS_BASE_PER_5S", 5)
     base_10s = _get(db, "GEMS_BASE_PER_10S", 10)
-    std      = _get(db, "GEMS_MULTIPLIER_STANDARD", 1)
-    hd       = _get(db, "GEMS_MULTIPLIER_HD", 2)
-    uhd      = _get(db, "GEMS_MULTIPLIER_ULTRA_HD", 4)
+    std      = _get(db, "GEMS_EXTRA_STANDARD", 0)
+    hd       = _get(db, "GEMS_EXTRA_HD", 10)
+    uhd      = _get(db, "GEMS_EXTRA_ULTRA_HD", 25)
     img      = _get(db, "IMAGE_JOB_COST", 150)
 
     return {
         "video": {
             "5s": {
-                "standard": base_5s * std,
-                "hd":       base_5s * hd,
-                "ultra_hd": base_5s * uhd,
+                "standard": base_5s  + std,
+                "hd":       base_5s  + hd,
+                "ultra_hd": base_5s  + uhd,
             },
             "10s": {
-                "standard": base_10s * std,
-                "hd":       base_10s * hd,
-                "ultra_hd": base_10s * uhd,
+                "standard": base_10s + std,
+                "hd":       base_10s + hd,
+                "ultra_hd": base_10s + uhd,
             },
         },
         "image_per_photo": img,
