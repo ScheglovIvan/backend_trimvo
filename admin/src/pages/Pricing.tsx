@@ -10,6 +10,7 @@ interface PricingData {
   gems_multiplier_standard: number;
   gems_multiplier_hd: number;
   gems_multiplier_ultra_hd: number;
+  image_job_cost: number;
 }
 
 interface PreviewRow {
@@ -115,6 +116,9 @@ export default function Pricing() {
               <InputNumber min={1} style={{ width: "100%" }} />
             </Form.Item>
             <Form.Item name="gems_multiplier_ultra_hd" label="Ultra HD quality multiplier" rules={[{ required: true }]}>
+              <InputNumber min={1} style={{ width: "100%" }} />
+            </Form.Item>
+            <Form.Item name="image_job_cost" label="Create Image — cost per image (gems)" rules={[{ required: true }]}>
               <InputNumber min={1} style={{ width: "100%" }} />
             </Form.Item>
             <Form.Item>
