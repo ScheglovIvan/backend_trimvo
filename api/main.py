@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-from routers import auth, templates, jobs, payments, reports, gem_packages, subscription_plans, categories, me, uploads
+from routers import auth, templates, jobs, payments, reports, gem_packages, subscription_plans, categories, me, uploads, pricing
 from routers import config as public_config
 from core.config import get_settings
 from routers.admin import templates as admin_templates
@@ -53,6 +53,7 @@ app.include_router(categories.router)
 app.include_router(me.router)
 app.include_router(uploads.router)
 app.include_router(public_config.router)
+app.include_router(pricing.router)
 app.include_router(admin_templates.router)
 app.include_router(admin_categories.router)
 app.include_router(admin_trends.router)
