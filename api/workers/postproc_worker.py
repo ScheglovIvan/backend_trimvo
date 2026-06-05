@@ -30,6 +30,8 @@ _SIGNED_URL_EXPIRES = 604800  # 7 days
 
 
 def _result_url(key: str) -> str:
+    if settings.r2_public_url_results:
+        return f"{settings.r2_public_url_results.rstrip('/')}/{key}"
     return get_signed_url(storage_settings.r2_bucket_results, key, expires=_SIGNED_URL_EXPIRES)
 
 

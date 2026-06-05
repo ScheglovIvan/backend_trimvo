@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     r2_access_key_id: str
     r2_secret_access_key: str
     r2_public_url_templates: str
+    r2_public_url_results: str = ""
     r2_bucket_uploads: str = "uploads"
     r2_bucket_results: str = "results"
     r2_bucket_templates: str = "templates"
