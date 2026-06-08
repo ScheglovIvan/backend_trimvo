@@ -390,7 +390,7 @@ def _public_url(bucket: str, path: str) -> str:
     from services.storage import get_signed_url
     if bucket == storage_settings.r2_bucket_templates:
         return f"{settings.r2_public_url_templates}/{path}"
-    if settings.r2_public_url_results:
+    if bucket == storage_settings.r2_bucket_results and settings.r2_public_url_results:
         return f"{settings.r2_public_url_results.rstrip('/')}/{path}"
     return get_signed_url(bucket, path, expires=86400)
 
