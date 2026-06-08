@@ -97,7 +97,9 @@ def _check_environment(tx: dict) -> None:
 def _apply_subscription(db: Session, user: User, plan: SubscriptionPlan, tx: dict) -> None:
     expires = tx["expires_date"]
     if expires is None:
-        if plan.period == "monthly":
+        if plan.period == "lifetime":
+            expires = None
+        elif plan.period == "monthly":
             expires = datetime.now(timezone.utc) + timedelta(days=31)
         else:
             expires = datetime.now(timezone.utc) + timedelta(days=366)
@@ -313,9 +315,8 @@ def apple_restore_purchases(
             )
         elif plan:
             purchase_type = "subscription"
-            # Only restore subscription if it's still active (not expired)
             expires = tx["expires_date"]
-            if expires and expires > datetime.now(timezone.utc):
+            if plan.period == "lifetime" or (expires and expires > datetime.now(timezone.utc)):
                 _apply_subscription(db, current_user, plan, tx)
         else:
             logger.warning("Restore: unknown product_id %s — skipping", tx["product_id"])
