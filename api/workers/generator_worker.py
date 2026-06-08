@@ -1,4 +1,4 @@
-"""Generator worker: real AI generation via Replicate API."""
+"""Generator worker: AI generation via Replicate (image/video) and Wavespeed (face swap)."""
 import sys
 import os
 import json
@@ -45,8 +45,8 @@ settings = get_settings()
 REPLICATE_API_TOKEN = os.environ.get("REPLICATE_API_TOKEN", "") or settings.replicate_api_token
 REPLICATE_BASE = "https://api.replicate.com/v1"
 
-# arabyai-replicate/roop_face_swap — video face swap (swap_image=face, target_video=video)
-MODEL_FACESWAP = "11b6bf0f4e14d808f655e87e5448233cceff10a45f659d71539cafb7163b2e84"
+WAVESPEED_API_KEY = os.environ.get("WAVESPEED_API_KEY", "") or settings.wavespeed_api_key
+WAVESPEED_BASE = "https://api.wavespeed.ai/api/v3"
 
 # minimax/video-01-live — video generation from prompt + reference image
 MODEL_REF_VIDEO = "7574e16b8f1ad52c6332ecb264c0f132e555f46c222255a738131ec1bb614092"
@@ -151,8 +151,70 @@ def _crop_to_aspect_ratio(image_bytes: bytes, aspect_ratio: str) -> bytes:
 
 
 def _ensure_public_url(url: str) -> str:
-    """R2 URLs (public or presigned) are reachable from Replicate's cloud — return as-is."""
+    """R2 URLs (public or presigned) are reachable from external APIs — return as-is."""
     return url
+
+
+# ---------------------------------------------------------------------------
+# Wavespeed.ai — akool/video-face-swap
+# ---------------------------------------------------------------------------
+
+def _wavespeed_faceswap(source_images: list, target_images: list, video_url: str,
+                        poll_interval: int = 10, timeout: int = 900) -> str:
+    """Call wavespeed.ai akool/video-face-swap, poll until done, return output video URL.
+
+    source_images: user face photos (faces to swap IN)
+    target_images: reference faces from template (faces to be REPLACED)
+    """
+    if not WAVESPEED_API_KEY:
+        raise RuntimeError("WAVESPEED_API_KEY is not set")
+
+    headers = {
+        "Authorization": f"Bearer {WAVESPEED_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    resp = requests.post(
+        f"{WAVESPEED_BASE}/akool/video-face-swap",
+        headers=headers,
+        json={
+            "video": video_url,
+            "source_image": source_images,
+            "target_image": target_images,
+            "face_enhance": True,
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    body = resp.json()
+    request_id = body["data"]["id"]
+    logger.info(f"Wavespeed prediction started: {request_id}")
+
+    elapsed = 0
+    while elapsed < timeout:
+        time.sleep(poll_interval)
+        elapsed += poll_interval
+
+        poll = requests.get(
+            f"{WAVESPEED_BASE}/predictions/{request_id}/result",
+            headers={"Authorization": f"Bearer {WAVESPEED_API_KEY}"},
+            timeout=30,
+        )
+        poll.raise_for_status()
+        body = poll.json()
+        inner = body.get("data", {})
+        status = inner.get("status")
+        logger.info(f"Wavespeed {request_id}: status={status} elapsed={elapsed}s")
+
+        if status == "completed":
+            outputs = inner.get("outputs", [])
+            if not outputs:
+                raise RuntimeError("Wavespeed completed but returned no outputs")
+            return outputs[0]
+
+        if status in ("failed", "canceled", "error"):
+            raise RuntimeError(f"Wavespeed {status}: {inner.get('error') or body}")
+
+    raise RuntimeError(f"Wavespeed timed out after {timeout}s")
 
 
 
@@ -300,21 +362,6 @@ def _replicate_run_list(model_version: str, input_data: dict,
 # Download Replicate result → upload to MinIO
 # ---------------------------------------------------------------------------
 
-def _reupload_to_replicate(url: str, filename: str = "intermediate.mp4") -> str:
-    """Download from any URL and re-upload to Replicate Files API.
-
-    Used between sequential face swap passes — Replicate's delivery URLs can
-    cause FFmpeg errors when used as input to a second roop prediction.
-    Re-uploading through Files API gives the model a clean, stable file URL.
-    """
-    logger.info(f"Re-uploading intermediate result to Replicate Files: {url[:60]}...")
-    resp = requests.get(url, timeout=180, stream=True)
-    resp.raise_for_status()
-    data = b"".join(resp.iter_content(chunk_size=65536))
-    logger.info(f"Downloaded {len(data) // 1024} KB, re-uploading...")
-    return _upload_to_replicate(data, filename)
-
-
 def _save_to_r2(url: str, bucket: str, key: str) -> str:
     logger.info(f"Downloading result: {url[:80]}...")
     resp = requests.get(url, timeout=180, stream=True)
@@ -340,11 +387,12 @@ def _save_to_r2(url: str, bucket: str, key: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _public_url(bucket: str, path: str) -> str:
-    """Public URL for R2: templates use public bucket URL, others use presigned."""
     from services.storage import get_signed_url
     if bucket == storage_settings.r2_bucket_templates:
         return f"{settings.r2_public_url_templates}/{path}"
-    return get_signed_url(bucket, path, expires=3600)
+    if settings.r2_public_url_results:
+        return f"{settings.r2_public_url_results.rstrip('/')}/{path}"
+    return get_signed_url(bucket, path, expires=86400)
 
 
 def _resolve_photo(url: str) -> str:
@@ -375,66 +423,41 @@ def _secondary_photo(options: dict) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# roop retry wrapper — the model leaves /tmp/output.mp4 on warm containers,
-# causing "File already exists" FFmpeg error. Retry forces a fresh container.
-# ---------------------------------------------------------------------------
-
-_ROOP_STALE_FILE_ERROR = "returned non-zero exit status 1"
-
-def _roop_run_with_retry(input_data: dict, max_attempts: int = 3) -> str:
-    last_exc: Exception | None = None
-    for attempt in range(max_attempts):
-        try:
-            return _replicate_run(MODEL_FACESWAP, input_data, poll_interval=8, timeout=300)
-        except RuntimeError as e:
-            if _ROOP_STALE_FILE_ERROR in str(e):
-                last_exc = e
-                logger.warning(
-                    f"roop: stale /tmp/output.mp4 on container (attempt {attempt + 1}/{max_attempts}), "
-                    "retrying on fresh container..."
-                )
-                time.sleep(3)
-                continue
-            raise
-    raise RuntimeError(f"roop face swap failed after {max_attempts} attempts: {last_exc}")
-
-
-# ---------------------------------------------------------------------------
 # Job handlers
 # ---------------------------------------------------------------------------
 
 def _run_face_swap(job_id: str, job, db) -> str:
-    """Face swap: replace face(s) on template VIDEO.
+    """Face swap: replace face(s) on template VIDEO via wavespeed.ai akool/video-face-swap.
 
-    Uses arabyai-replicate/roop_face_swap (video model, A100, ~$0.10/run).
-    Inputs: swap_image=face photo, target_video=template video.
-    Output: mp4 video with swapped face.
+    source_image = user face photo(s) — swapped INTO the video.
+    target_image = template thumbnail — reference of the face being REPLACED.
 
-    2-face strategy: both swaps run on the ORIGINAL template video independently,
-    then we pick the male result as primary (roop cannot chain swaps reliably —
-    quality degrades and face detection fails on the second pass).
+    1-face: single API call.
+    2-face: two sequential calls — pass 1 swaps the primary face on the original
+    template; pass 2 swaps the secondary face on the result of pass 1.
     """
     options = job.options or {}
 
-    # Resolve template VIDEO
-    raw_template = (options.get("template_video_url") or options.get("video_url"))
-    if not raw_template:
-        template = db.query(Template).filter(Template.id == job.template_id).first()
-        if template and template.video_path:
-            raw_template = _public_url(storage_settings.r2_bucket_templates, template.video_path)
-        elif template and template.thumb_path:
-            raw_template = _public_url(storage_settings.r2_bucket_templates, template.thumb_path)
+    # Resolve template VIDEO URL
+    raw_template = options.get("template_video_url") or options.get("video_url")
+    template_obj = db.query(Template).filter(Template.id == job.template_id).first()
+    if not raw_template and template_obj:
+        if template_obj.video_path:
+            raw_template = _public_url(storage_settings.r2_bucket_templates, template_obj.video_path)
+        elif template_obj.thumb_path:
+            raw_template = _public_url(storage_settings.r2_bucket_templates, template_obj.thumb_path)
 
     if not raw_template:
         raise RuntimeError("Face swap: no template video available (set video_path on template)")
 
-    # Upload template once to Replicate Files — reused by both passes
-    template_replicate_url = _ensure_public_url(raw_template)
+    # Template thumbnail as target face reference (the face to be replaced)
+    if not template_obj or not template_obj.thumb_path:
+        raise RuntimeError("Face swap: template has no thumbnail — required as target_image for wavespeed")
+    target_face_url = _public_url(storage_settings.r2_bucket_templates, template_obj.thumb_path)
 
     # Resolve user photos
     male_url   = options.get("photo_url") or options.get("photo_url_male")
     female_url = options.get("photo_url_female")
-
     if not male_url and not female_url:
         p1 = options.get("photo_1_path")
         p2 = options.get("photo_2_path")
@@ -448,31 +471,25 @@ def _run_face_swap(job_id: str, job, db) -> str:
 
     result_url = None
 
-    # Pass 1 — primary / male face on original template
+    # Pass 1 — primary (male) face on original template
     if male_url:
-        logger.info("Face swap pass 1 (male/primary) on original template")
-        swap1_url = _ensure_public_url(male_url)
-        result_url = _roop_run_with_retry({
-            "swap_image":   swap1_url,
-            "target_video": template_replicate_url,
-        })
+        logger.info(f"Job {job_id}: wavespeed face swap pass 1 (primary/male)")
+        result_url = _wavespeed_faceswap(
+            source_images=[_ensure_public_url(male_url)],
+            target_images=[target_face_url],
+            video_url=raw_template,
+        )
 
-    # Pass 2 — female face ALSO on original template (independent of pass 1)
-    # Roop cannot chain: output of pass 1 has degraded faces that break pass 2 detection.
-    # Running on the original gives us a clean female-swapped video; we use it as fallback
-    # or primary when no male photo is provided.
+    # Pass 2 — secondary (female) face on the result of pass 1 (or original if male-only skipped)
     if female_url:
-        logger.info("Face swap pass 2 (female) on original template")
-        swap2_url = _ensure_public_url(female_url)
-        female_result = _roop_run_with_retry({
-            "swap_image":   swap2_url,
-            "target_video": template_replicate_url,
-        })
-        # Use female result only if no male pass was done
-        if result_url is None:
-            result_url = female_result
+        logger.info(f"Job {job_id}: wavespeed face swap pass 2 (secondary/female)")
+        base_video = result_url if result_url else raw_template
+        result_url = _wavespeed_faceswap(
+            source_images=[_ensure_public_url(female_url)],
+            target_images=[target_face_url],
+            video_url=base_video,
+        )
 
-    # Return Replicate URL directly — postproc will download + store in MinIO
     logger.info(f"Job {job_id} face swap done → {result_url[:60]}...")
     return result_url
 
@@ -725,7 +742,9 @@ def process_job(job_id: str):
             return
 
         # ── REAL AI MODE ─────────────────────────────────────────────────
-        if not REPLICATE_API_TOKEN:
+        if job_type == "template" and not WAVESPEED_API_KEY:
+            raise RuntimeError("WAVESPEED_API_KEY is not set")
+        if job_type != "template" and not REPLICATE_API_TOKEN:
             raise RuntimeError("REPLICATE_API_TOKEN is not set")
 
         job.progress = 20

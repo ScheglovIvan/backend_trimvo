@@ -1,10 +1,12 @@
 import uuid
+from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from uuid import UUID
 from typing import Optional
 from core.database import get_db
 from core.dependencies import get_current_user
+from core.config import get_settings
 from models.job import Job
 from models.user import User
 from models.template import Template
@@ -16,6 +18,20 @@ from schemas.job import (
 from services.queue import publish_job, QUEUE_GENERATOR
 from services.gems import apply_svip_discount, deduct_gems, refund_gems
 from services.storage import upload_file, settings as storage_settings, get_client
+
+_settings = get_settings()
+
+
+def _to_public_url(url: Optional[str]) -> Optional[str]:
+    """Convert an expired presigned R2 URL to a stable public URL."""
+    if not url or "X-Amz-" not in url:
+        return url
+    parsed = urlparse(url)
+    parts = parsed.path.lstrip("/").split("/", 1)
+    if len(parts) < 2 or not _settings.r2_public_url_results:
+        return url
+    key = parts[1]  # strip bucket prefix, keep job_id/image_n.png
+    return f"{_settings.r2_public_url_results.rstrip('/')}/{key}"
 
 PHOTO_ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp"}
 PHOTO_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
@@ -313,11 +329,12 @@ def get_job(
     job = db.query(Job).filter(Job.id == job_id, Job.user_id == current_user.id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    result_urls = (job.options or {}).get("result_image_urls") or None
+    result_urls_raw = (job.options or {}).get("result_image_urls") or None
+    result_urls = [_to_public_url(u) for u in result_urls_raw] if result_urls_raw else None
     return JobStatusResponse(
         status=job.status,
         progress=job.progress,
-        result_url=job.result_path,
+        result_url=_to_public_url(job.result_path),
         preview_url=job.preview_url,
         thumb_url=job.thumb_url,
         original_url=job.original_url,
