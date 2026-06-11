@@ -14,7 +14,13 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("templates", sa.Column("preview_compressed_path", sa.String(500), nullable=True))
+    conn = op.get_bind()
+    result = conn.execute(sa.text(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name='templates' AND column_name='preview_compressed_path'"
+    ))
+    if not result.fetchone():
+        op.add_column("templates", sa.Column("preview_compressed_path", sa.String(500), nullable=True))
 
 
 def downgrade() -> None:

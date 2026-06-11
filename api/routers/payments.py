@@ -3,6 +3,7 @@ from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from uuid import UUID
 from pydantic import BaseModel
 
@@ -94,7 +95,7 @@ def _check_environment(tx: dict) -> None:
         raise HTTPException(status_code=400, detail="Sandbox receipt rejected in production mode")
 
 
-def _apply_subscription(db: Session, user: User, plan: SubscriptionPlan, tx: dict) -> None:
+def _apply_subscription(db: Session, user: User, plan: SubscriptionPlan, tx: dict, grant_bonus: bool = True) -> None:
     expires = tx["expires_date"]
     if expires is None:
         if plan.period == "lifetime":
@@ -107,7 +108,7 @@ def _apply_subscription(db: Session, user: User, plan: SubscriptionPlan, tx: dic
     user.subscription_status = plan.tier
     user.subscription_expires_at = expires
 
-    if plan.bonus_gems > 0:
+    if grant_bonus and plan.bonus_gems > 0:
         add_gems(
             db, user, plan.bonus_gems,
             tx_type="subscription_bonus",
@@ -179,7 +180,18 @@ def apple_verify_purchase(
         status="processed",
     )
     db.add(iap_record)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        # Concurrent duplicate — idempotent response
+        return AppleVerifyPurchaseResponse(
+            success=True,
+            transaction_id=tx["transaction_id"],
+            product_id=tx["product_id"],
+            gems_added=0,
+            new_balance=current_user.gems,
+        )
 
     logger.info(
         "Apple gem purchase: user=%s product=%s gems=%d tx=%s",
@@ -246,7 +258,18 @@ def apple_verify_subscription(
         status="processed",
     )
     db.add(iap_record)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        return AppleVerifySubscriptionResponse(
+            success=True,
+            transaction_id=tx["transaction_id"],
+            product_id=tx["product_id"],
+            subscription_status=current_user.subscription_status,
+            expires_at=current_user.subscription_expires_at,
+            bonus_gems_added=0,
+        )
 
     logger.info(
         "Apple subscription: user=%s product=%s tier=%s expires=%s tx=%s",
@@ -381,19 +404,19 @@ def apple_notifications(body: AppleNotificationRequest, db: Session = Depends(ge
         notification_type, subtype, tx.get("product_id"), tx.get("original_transaction_id"),
     )
 
-    if notification_type in ("SUBSCRIBED", "DID_RENEW"):
-        _handle_subscription_activated(db, tx)
-    elif notification_type == "EXPIRED":
+    if notification_type == "SUBSCRIBED":
+        _handle_subscription_activated(db, tx, grant_bonus=True)
+    elif notification_type == "DID_RENEW":
+        _handle_subscription_activated(db, tx, grant_bonus=False)
+    elif notification_type in ("EXPIRED", "DID_FAIL_TO_RENEW", "GRACE_PERIOD_EXPIRED"):
         _handle_subscription_expired(db, tx)
     elif notification_type in ("REFUND", "REVOKE"):
         _handle_refund_or_revoke(db, tx, notification_type)
-    elif notification_type == "GRACE_PERIOD_EXPIRED":
-        _handle_subscription_expired(db, tx)
 
     return {"received": True}
 
 
-def _handle_subscription_activated(db: Session, tx: dict) -> None:
+def _handle_subscription_activated(db: Session, tx: dict, grant_bonus: bool = True) -> None:
     if not tx.get("original_transaction_id"):
         return
 
@@ -421,14 +444,13 @@ def _handle_subscription_activated(db: Session, tx: dict) -> None:
         logger.warning("Apple notification: plan not found for product_id=%s", tx["product_id"])
         return
 
-    # Deduplicate renewals by transaction_id
     already = db.query(AppleIAPTransaction).filter(
         AppleIAPTransaction.transaction_id == tx["transaction_id"]
     ).first()
     if already:
         return
 
-    _apply_subscription(db, user, plan, tx)
+    _apply_subscription(db, user, plan, tx, grant_bonus=grant_bonus)
 
     iap_record = AppleIAPTransaction(
         user_id=user.id,
@@ -494,6 +516,23 @@ def _handle_refund_or_revoke(db: Session, tx: dict, notification_type: str) -> N
     if iap_record.purchase_type == "subscription":
         user.subscription_status = "free"
         user.subscription_expires_at = None
+    elif iap_record.purchase_type == "gem_purchase":
+        gem_pkg = db.query(GemPackage).filter(
+            GemPackage.apple_product_id == iap_record.product_id
+        ).first()
+        if gem_pkg:
+            gems_to_deduct = (gem_pkg.gems_amount + gem_pkg.bonus_gems) * iap_record.quantity
+            gems_to_deduct = min(gems_to_deduct, user.gems)
+            if gems_to_deduct > 0:
+                user.gems -= gems_to_deduct
+                db.add(GemTransaction(
+                    user_id=user.id,
+                    amount=-gems_to_deduct,
+                    balance_after=user.gems,
+                    type="refund",
+                    description=f"Apple {new_status}: {iap_record.product_id}",
+                    reference_id=tx["transaction_id"],
+                ))
 
     db.commit()
     logger.info(
